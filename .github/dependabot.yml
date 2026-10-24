@@ -38,6 +38,10 @@ updates:
       day: monday
     cooldown:
       default-days: 14
+    ignore:
+      # Provider majors (azurerm 5.x) change resource schemas; upgrade deliberately.
+      - dependency-name: hashicorp/azurerm
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: "infra"
 
@@ -48,5 +52,10 @@ updates:
       day: monday
     cooldown:
       default-days: 14
+    ignore:
+      # The base image must match requires-python (3.12) in pyproject.toml and
+      # uv.lock; a Python minor upgrade is a reviewed change, not a bump.
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     commit-message:
       prefix: "image"
