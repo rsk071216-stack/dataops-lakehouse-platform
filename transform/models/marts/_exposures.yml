@@ -1,0 +1,28 @@
+exposures:
+  - name: operations_kpi_dashboard
+    label: Operations KPI dashboard
+    type: dashboard
+    maturity: high
+    url: https://rsk071216-stack.github.io/dataops-lakehouse-platform/quality/
+    description: >-
+      Daily trips, revenue and tip behaviour per borough for the operations team
+      (Power BI or Metabase on top of the gold schema). Breaks if a gold contract
+      changes, which is why gold models have enforced contracts.
+    depends_on:
+      - ref('mart_daily_borough_kpis')
+      - ref('dim_zones')
+    owner:
+      name: Mobility operations analytics
+      email: data-platform@example.com
+
+  - name: driver_supply_planner
+    label: Driver supply planner
+    type: application
+    maturity: medium
+    description: >-
+      Hour-of-day demand per zone used to position vehicles ahead of demand peaks.
+    depends_on:
+      - ref('mart_zone_hourly_demand')
+    owner:
+      name: Fleet planning
+      email: data-platform@example.com

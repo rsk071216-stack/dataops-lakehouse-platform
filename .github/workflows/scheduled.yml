@@ -1,0 +1,118 @@
+name: scheduled
+
+# Daily canary: the full Dagster asset graph (landing, dlt, dbt, asset checks) on
+# the committed fixture. Weekly: the ingestion contracts against the LIVE upstream
+# files, which is how an upstream schema change is detected before it hits prod.
+# Failures open (or update) a GitHub issue instead of failing silently.
+
+on:
+  schedule:
+    - cron: "23 5 * * *" # daily canary
+    - cron: "41 6 * * 1" # weekly live upstream contract check (Mondays)
+  workflow_dispatch:
+    inputs:
+      live_contract:
+        description: Also test the contracts against the live NYC TLC files
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scheduled
+  cancel-in-progress: false
+
+env:
+  DBT_PROFILES_DIR: ${{ github.workspace }}/transform
+  LAKEHOUSE_DUCKDB_PATH: ${{ github.workspace }}/.lake/warehouse.duckdb
+  DO_NOT_TRACK: "1"
+  DBT_SEND_ANONYMOUS_USAGE_STATS: "false"
+
+jobs:
+  canary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-lakehouse
+
+      - name: dbt parse
+        working-directory: transform
+        run: uv run --frozen dbt parse
+
+      - name: Run the full asset graph with asset checks
+        run: uv run --frozen lakehouse run | tee canary.log
+
+      - name: Open or update the canary issue
+        if: failure()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create pipeline-canary --color B60205 --description "Scheduled pipeline canary failed" --force
+          body="The scheduled canary failed: ${RUN_URL}
+
+          Failed checks (structured events):
+          \`\`\`
+          $(grep '"lakehouse.check"' canary.log | grep '"passed": false' | head -n 20 || true)
+          \`\`\`"
+          number="$(gh issue list --state open --label pipeline-canary --json number --jq '.[0].number // empty')"
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "$body"
+          else
+            gh issue create --title "Scheduled pipeline canary failed" --label pipeline-canary --body "$body"
+          fi
+
+  live-contract:
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '41 6 * * 1') ||
+      (github.event_name == 'workflow_dispatch' && inputs.live_contract)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      MONTH: "2024-01"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-lakehouse
+        with:
+          dbt-deps: "false"
+
+      - name: Download the live upstream files
+        run: |
+          mkdir -p .cache/live
+          curl -sSfL --retry 3 -o .cache/live/green_tripdata.parquet \
+            "https://d37ci6vzurychx.cloudfront.net/trip-data/green_tripdata_${MONTH}.parquet"
+          curl -sSfL --retry 3 -o .cache/live/taxi_zone_lookup.csv \
+            "https://d37ci6vzurychx.cloudfront.net/misc/taxi_zone_lookup.csv"
+
+      - name: Test the ingestion contracts against live data
+        run: |
+          uv run --frozen datacontract test --server live contracts/tlc_green_trips.odcs.yaml
+          uv run --frozen datacontract test --server live contracts/tlc_taxi_zones.odcs.yaml
+
+      - name: Open an upstream drift issue
+        if: failure()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create upstream-drift --color D93F0B --description "Live source no longer matches its contract" --force
+          number="$(gh issue list --state open --label upstream-drift --json number --jq '.[0].number // empty')"
+          body="The live NYC TLC files no longer match the ODCS contracts in contracts/: ${RUN_URL}"
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "$body"
+          else
+            gh issue create --title "Upstream data contract drift detected" --label upstream-drift --body "$body"
+          fi

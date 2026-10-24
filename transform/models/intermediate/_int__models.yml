@@ -1,0 +1,66 @@
+models:
+  - name: int_trips__validated
+    description: Every bronze trip with a deterministic trip_id and its first violated business rule.
+    columns:
+      - name: trip_id
+        data_tests: [not_null]
+      - name: rejection_reason
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - missing_timestamp
+                  - duplicate_record
+                  - outside_source_month
+                  - non_positive_duration
+                  - implausible_duration
+                  - zero_distance
+                  - implausible_distance
+                  - negative_amount
+
+  - name: int_trips__cleaned
+    description: Trips that passed every business rule. The only input to the gold layer.
+    columns:
+      - name: trip_id
+        data_tests: [unique, not_null]
+      - name: trip_duration_min
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 360
+                inclusive: true
+
+  - name: int_trips__rejected
+    description: Quarantined trips with the reason they were rejected.
+    columns:
+      - name: rejection_reason
+        data_tests: [not_null]
+
+unit_tests:
+  - name: ut_validated_applies_rejection_rules_in_priority_order
+    description: >-
+      Each business rule maps to exactly one reason and earlier rules win.
+      Covers the real-world noise found when profiling TLC data.
+    model: int_trips__validated
+    given:
+      - input: ref('stg_tlc__green_trips')
+        rows:
+          - {vendor_id: 2, pickup_at: "2024-01-10 08:00:00", dropoff_at: "2024-01-10 08:20:00", pickup_zone_id: 74, dropoff_zone_id: 75, trip_distance_mi: 3.10, fare_amount: 18.40, total_amount: 22.90, source_month: "2024-01", source_file: a.csv, load_id: "1"}
+          - {vendor_id: 2, pickup_at: "2023-12-31 23:50:00", dropoff_at: "2024-01-01 00:10:00", pickup_zone_id: 74, dropoff_zone_id: 75, trip_distance_mi: 2.00, fare_amount: 12.00, total_amount: 14.00, source_month: "2024-01", source_file: a.csv, load_id: "1"}
+          - {vendor_id: 2, pickup_at: "2024-01-11 09:00:00", dropoff_at: "2024-01-11 08:59:00", pickup_zone_id: 74, dropoff_zone_id: 75, trip_distance_mi: 1.00, fare_amount: 8.00, total_amount: 9.00, source_month: "2024-01", source_file: a.csv, load_id: "1"}
+          - {vendor_id: 2, pickup_at: "2024-01-12 10:00:00", dropoff_at: "2024-01-12 10:05:00", pickup_zone_id: 74, dropoff_zone_id: 74, trip_distance_mi: 0.00, fare_amount: 5.00, total_amount: 6.00, source_month: "2024-01", source_file: a.csv, load_id: "1"}
+          - {vendor_id: 2, pickup_at: "2024-01-13 11:00:00", dropoff_at: "2024-01-13 11:10:00", pickup_zone_id: 74, dropoff_zone_id: 75, trip_distance_mi: 1.50, fare_amount: -9.00, total_amount: -9.00, source_month: "2024-01", source_file: a.csv, load_id: "1"}
+          - {vendor_id: 2, pickup_at: "2024-01-14 12:00:00", dropoff_at: "2024-01-14 20:00:00", pickup_zone_id: 74, dropoff_zone_id: 75, trip_distance_mi: 9.00, fare_amount: 40.00, total_amount: 45.00, source_month: "2024-01", source_file: a.csv, load_id: "1"}
+          - {vendor_id: 2, pickup_at: "2024-01-15 13:00:00", dropoff_at: "2024-01-15 13:30:00", pickup_zone_id: 74, dropoff_zone_id: 75, trip_distance_mi: 5000.00, fare_amount: 30.00, total_amount: 35.00, source_month: "2024-01", source_file: a.csv, load_id: "1"}
+          - {vendor_id: 2, pickup_at: "2024-01-10 08:00:00", dropoff_at: "2024-01-10 08:20:00", pickup_zone_id: 74, dropoff_zone_id: 75, trip_distance_mi: 3.10, fare_amount: 18.40, total_amount: 22.90, source_month: "2024-01", source_file: b.csv, load_id: "1"}
+    expect:
+      rows:
+        - {pickup_at: "2024-01-10 08:00:00", source_file: a.csv, trip_duration_min: "20.00", rejection_reason: null}
+        - {pickup_at: "2023-12-31 23:50:00", source_file: a.csv, trip_duration_min: "20.00", rejection_reason: outside_source_month}
+        - {pickup_at: "2024-01-11 09:00:00", source_file: a.csv, trip_duration_min: "-1.00", rejection_reason: non_positive_duration}
+        - {pickup_at: "2024-01-12 10:00:00", source_file: a.csv, trip_duration_min: "5.00", rejection_reason: zero_distance}
+        - {pickup_at: "2024-01-13 11:00:00", source_file: a.csv, trip_duration_min: "10.00", rejection_reason: negative_amount}
+        - {pickup_at: "2024-01-14 12:00:00", source_file: a.csv, trip_duration_min: "480.00", rejection_reason: implausible_duration}
+        - {pickup_at: "2024-01-15 13:00:00", source_file: a.csv, trip_duration_min: "30.00", rejection_reason: implausible_distance}
+        - {pickup_at: "2024-01-10 08:00:00", source_file: b.csv, trip_duration_min: "20.00", rejection_reason: duplicate_record}

@@ -1,0 +1,25 @@
+sources:
+  - name: raw_tlc
+    description: >-
+      Raw NYC TLC deliveries loaded by dlt (src/lakehouse/ingest). The ingestion
+      boundary is governed by contracts/tlc_green_trips.odcs.yaml and a frozen dlt
+      schema contract, so columns here only change through a reviewed pull request.
+    schema: raw_tlc
+    loaded_at_field: ingested_at
+    config:
+      freshness:
+        warn_after: {count: 26, period: hour}
+        error_after: {count: 50, period: hour}
+    tables:
+      - name: green_trips
+        description: One row per green taxi trip, one source month per delivery.
+        columns:
+          - name: pickup_datetime
+            data_tests: [not_null]
+          - name: source_month
+            data_tests: [not_null]
+      - name: taxi_zones
+        description: TLC taxi zone lookup (265 zones), replaced on every load.
+        columns:
+          - name: location_id
+            data_tests: [unique, not_null]

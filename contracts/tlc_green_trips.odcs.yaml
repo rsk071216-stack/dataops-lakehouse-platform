@@ -1,0 +1,120 @@
+# Open Data Contract Standard (ODCS) v3.2.0 - ingestion boundary contract.
+# Producer: NYC Taxi & Limousine Commission (public trip record data).
+# Consumer: dataops-lakehouse-platform bronze layer (raw_tlc.green_trips).
+# Tested in CI with datacontract-cli against the committed fixture, and
+# weekly against the live upstream file (see .github/workflows/scheduled.yml).
+apiVersion: v3.2.0
+kind: DataContract
+id: urn:datacontract:tlc:green-trips
+name: NYC TLC green taxi trip records
+version: 1.0.0
+status: active
+domain: mobility
+dataProduct: tlc-trips
+tenant: public
+description:
+  purpose: >-
+    Monthly trip-level records for NYC green (boro) taxis. Feeds the mobility
+    operations marts (daily borough KPIs, zone demand) in the gold layer.
+  limitations: >-
+    Provider data contains real-world noise (negative fares from refunds, zero
+    distance trips, pickups outside the file month). The contract only guards the
+    structural shape and code domains; business cleansing happens in silver.
+  usage: Load with dlt into raw_tlc.green_trips, never modify in place.
+servers:
+  - server: fixture
+    type: local
+    format: csv
+    path: data/fixtures/tlc/green_tripdata_2024-01.csv
+    customProperties:
+      - property: delimiter
+        value: ","
+  - server: live
+    type: local
+    format: parquet
+    path: .cache/live/green_tripdata.parquet
+schema:
+  - name: green_tripdata
+    physicalName: green_tripdata
+    physicalType: table
+    logicalType: object
+    description: One row per completed green taxi trip as reported by the vendor.
+    properties:
+      - name: VendorID
+        logicalType: integer
+        required: true
+        description: TPEP/LPEP provider code (1 Creative Mobile, 2 Curb/VeriFone, 6 Myle).
+        logicalTypeOptions: {minimum: 1, maximum: 6}
+      - name: lpep_pickup_datetime
+        logicalType: timestamp
+        required: true
+        criticalDataElement: true
+      - name: lpep_dropoff_datetime
+        logicalType: timestamp
+        required: true
+      - name: store_and_fwd_flag
+        logicalType: string
+      - name: RatecodeID
+        logicalType: integer
+        logicalTypeOptions: {minimum: 1, maximum: 99}
+      - name: PULocationID
+        logicalType: integer
+        required: true
+        criticalDataElement: true
+        logicalTypeOptions: {minimum: 1, maximum: 265}
+      - name: DOLocationID
+        logicalType: integer
+        required: true
+        logicalTypeOptions: {minimum: 1, maximum: 265}
+      - name: passenger_count
+        logicalType: integer
+      - name: trip_distance
+        logicalType: number
+        required: true
+      - name: fare_amount
+        logicalType: number
+        required: true
+        criticalDataElement: true
+      - name: extra
+        logicalType: number
+      - name: mta_tax
+        logicalType: number
+      - name: tip_amount
+        logicalType: number
+      - name: tolls_amount
+        logicalType: number
+      - name: improvement_surcharge
+        logicalType: number
+      - name: total_amount
+        logicalType: number
+        required: true
+        criticalDataElement: true
+      - name: payment_type
+        logicalType: integer
+        logicalTypeOptions: {minimum: 0, maximum: 6}
+      - name: trip_type
+        logicalType: integer
+        logicalTypeOptions: {minimum: 1, maximum: 2}
+      - name: congestion_surcharge
+        logicalType: number
+    quality:
+      - type: library
+        metric: rowCount
+        mustBeGreaterThan: 1000
+        description: A monthly file with fewer than 1000 trips signals a truncated delivery.
+team:
+  name: data-platform
+  members:
+    - username: raees.khan
+      role: owner
+support:
+  - channel: github-issues
+    url: https://github.com/rsk071216-stack/dataops-lakehouse-platform/issues
+slaProperties:
+  - property: frequency
+    value: 1
+    unit: month
+  - property: latency
+    value: 60
+    unit: day
+    description: TLC publishes each month with roughly a two month delay.

@@ -1,0 +1,28 @@
+name: Set up lakehouse toolchain
+description: Install uv, the pinned Python and the locked dependencies, then install dbt packages.
+
+inputs:
+  dbt-deps:
+    description: Run `dbt deps` (needed for anything that parses the dbt project).
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Install uv
+      uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+      with:
+        version: "0.13.0"
+        python-version: "3.12"
+        enable-cache: true
+        cache-dependency-glob: uv.lock
+
+    - name: Install locked dependencies
+      shell: bash
+      run: uv sync --frozen
+
+    - name: Install dbt packages
+      if: inputs.dbt-deps == 'true'
+      shell: bash
+      working-directory: transform
+      run: uv run --frozen dbt deps

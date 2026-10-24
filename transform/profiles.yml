@@ -1,0 +1,24 @@
+# No secrets live here: every credential comes from the environment.
+# duckdb   - local development and fast CI (default)
+# postgres - CI service container, per-PR schemas and Azure Database for PostgreSQL
+lakehouse:
+  target: "{{ env_var('DBT_TARGET', 'duckdb') }}"
+  outputs:
+    duckdb:
+      type: duckdb
+      path: "{{ env_var('LAKEHOUSE_DUCKDB_PATH', '../.lake/warehouse.duckdb') }}"
+      schema: "{{ env_var('DBT_SCHEMA', 'analytics') }}"
+      threads: 4
+    postgres:
+      type: postgres
+      host: "{{ env_var('PGHOST', 'localhost') }}"
+      port: "{{ env_var('PGPORT', '5432') | int }}"
+      dbname: "{{ env_var('PGDATABASE', 'lakehouse') }}"
+      user: "{{ env_var('PGUSER', 'lakehouse') }}"
+      # Password auth in CI (throwaway service container); in Azure this is a
+      # short-lived Entra ID token injected by `lakehouse` at runtime.
+      password: "{{ env_var('PGPASSWORD', '') }}"
+      sslmode: "{{ env_var('PGSSLMODE', 'prefer') }}"
+      schema: "{{ env_var('DBT_SCHEMA', 'analytics') }}"
+      threads: 4
+      connect_timeout: 15

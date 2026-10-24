@@ -1,0 +1,66 @@
+models:
+  - name: stg_tlc__green_trips
+    description: >-
+      Bronze trips. Typed, renamed copy of raw_tlc.green_trips. Tests at this layer
+      guard structural and referential integrity of what the provider delivered;
+      a failure here blocks the Write-Audit-Publish publish step.
+    data_tests:
+      - row_count_between:
+          arguments:
+            min_rows: "{{ var('min_monthly_trips') }}"
+            max_rows: "{{ var('max_monthly_trips') }}"
+    columns:
+      - name: vendor_id
+        description: TPEP/LPEP provider (1 Creative Mobile, 2 Curb, 6 Myle).
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [1, 2, 6]
+                quote: false
+      - name: pickup_at
+        data_tests: [not_null]
+      - name: dropoff_at
+        data_tests: [not_null]
+      - name: pickup_zone_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_tlc__taxi_zones')
+                field: zone_id
+      - name: dropoff_zone_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_tlc__taxi_zones')
+                field: zone_id
+      - name: payment_type_code
+        description: 0 flex fare, 1 card, 2 cash, 3 no charge, 4 dispute, 5 unknown, 6 voided.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [0, 1, 2, 3, 4, 5, 6]
+                quote: false
+      - name: trip_type_code
+        description: 1 street-hail, 2 dispatch.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [1, 2]
+                quote: false
+      - name: source_month
+        data_tests: [not_null]
+
+  - name: stg_tlc__taxi_zones
+    description: Bronze taxi zones.
+    columns:
+      - name: zone_id
+        data_tests: [unique, not_null]
+      - name: borough
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["Bronx", "Brooklyn", "EWR", "Manhattan", "Queens", "Staten Island", "Unknown", "N/A"]

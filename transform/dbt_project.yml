@@ -1,0 +1,52 @@
+name: lakehouse
+version: "1.0.0"
+config-version: 2
+profile: lakehouse
+require-dbt-version: [">=1.10.0", "<2.0.0"]
+
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+seed-paths: ["seeds"]
+analysis-paths: ["analyses"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+flags:
+  require_explicit_package_overrides_for_builtin_materializations: true
+  send_anonymous_usage_stats: false
+
+vars:
+  # Volume guard rails for one month of the committed 1-in-10 fixture sample.
+  # Production overrides these with --vars (see docs/runbook.md).
+  min_monthly_trips: 1000
+  max_monthly_trips: 2000000
+  # Quality SLO: share of a delivery that may be quarantined in silver.
+  max_rejection_rate: 0.15
+
+models:
+  lakehouse:
+    +persist_docs:
+      relation: true
+      columns: true
+    staging:
+      # Bronze: typed, renamed 1:1 copy of raw. Materialized as tables (not views)
+      # so a published schema never reads through to mutable raw data (see ADR-0003).
+      +schema: bronze
+      +materialized: table
+      +tags: ["bronze"]
+    intermediate:
+      +schema: silver
+      +materialized: table
+      +tags: ["silver"]
+    marts:
+      +schema: gold
+      +materialized: table
+      +tags: ["gold"]
+      +contract:
+        enforced: true
+
+data_tests:
+  lakehouse:
+    +store_failures: false
+    +severity: error

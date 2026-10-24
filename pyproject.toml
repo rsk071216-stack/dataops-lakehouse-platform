@@ -1,0 +1,68 @@
+[project]
+name = "dataops-lakehouse-platform"
+version = "1.0.0"
+description = "Vendor-neutral lakehouse: dlt ingestion, dbt medallion transforms, Dagster orchestration, Write-Audit-Publish deployments driven by GitHub Actions."
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Raees Khan" }]
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "dlt[duckdb,postgres,parquet,az]==1.31.0",
+    "duckdb==1.5.6",
+    "dbt-core==1.12.5",
+    "dbt-duckdb==1.11.0",
+    "dbt-postgres==1.11.0",
+    "dagster==1.13.26",
+    "dagster-dbt==0.29.26",
+    "dagster-dlt==0.29.26",
+    "psycopg2-binary==2.9.13",
+    "azure-identity==1.26.0",
+]
+
+[dependency-groups]
+dev = [
+    "dagster-webserver==1.13.26",
+    "datacontract-cli[csv,parquet,postgres]==1.2.4",
+    "pytest==9.1.1",
+    "ruff==0.17.0",
+    "sqlfluff==4.4.0",
+    "sqlfluff-templater-dbt==4.4.0",
+    "yamllint==1.38.0",
+]
+
+[project.scripts]
+lakehouse = "lakehouse.cli:main"
+
+[build-system]
+requires = ["hatchling==1.32.4"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lakehouse"]
+
+[tool.uv]
+required-version = ">=0.13.0"
+
+[tool.dagster]
+module_name = "lakehouse.orchestration.definitions"
+code_location_name = "lakehouse"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF", "N", "PTH"]
+ignore = ["S101", "S603", "S607", "S608"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106"]
+# HTML template lines are intentionally long.
+"src/lakehouse/reporting/quality_report.py" = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
+markers = ["contract: runs datacontract-cli against fixtures (slower)"]
+filterwarnings = ["ignore::DeprecationWarning", "ignore::UserWarning"]

@@ -1,0 +1,58 @@
+# Open Data Contract Standard (ODCS) v3.2.0 - ingestion boundary contract.
+# Reference data: TLC taxi zone lookup, joined to every trip in silver and gold.
+apiVersion: v3.2.0
+kind: DataContract
+id: urn:datacontract:tlc:taxi-zones
+name: NYC TLC taxi zone lookup
+version: 1.0.0
+status: active
+domain: mobility
+dataProduct: tlc-trips
+tenant: public
+description:
+  purpose: Maps TLC LocationID codes to borough, zone and service zone.
+  usage: Load with dlt into raw_tlc.taxi_zones (full replace on every load).
+servers:
+  - server: fixture
+    type: local
+    format: csv
+    path: data/fixtures/tlc/taxi_zone_lookup.csv
+    customProperties:
+      - property: delimiter
+        value: ","
+  - server: live
+    type: local
+    format: csv
+    path: .cache/live/taxi_zone_lookup.csv
+    customProperties:
+      - property: delimiter
+        value: ","
+schema:
+  - name: taxi_zone_lookup
+    physicalName: taxi_zone_lookup
+    physicalType: table
+    logicalType: object
+    properties:
+      - name: LocationID
+        logicalType: integer
+        required: true
+        unique: true
+        primaryKey: true
+        logicalTypeOptions: {minimum: 1, maximum: 265}
+      - name: Borough
+        logicalType: string
+        required: true
+      - name: Zone
+        logicalType: string
+      - name: service_zone
+        logicalType: string
+    quality:
+      - type: library
+        metric: rowCount
+        mustBeGreaterThan: 259
+        description: TLC has published 263 real zones plus 2 catch-all codes since 2017.
+team:
+  name: data-platform
+  members:
+    - username: raees.khan
+      role: owner

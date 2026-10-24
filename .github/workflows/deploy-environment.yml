@@ -1,0 +1,182 @@
+name: deploy-environment
+
+# Reusable: plan -> (approval) apply -> roll the image -> run Write-Audit-Publish
+# in Azure by starting the Container Apps Job, i.e. the exact production path.
+#
+# Per GitHub environment (dev, prod), configure these *variables* (not secrets):
+#   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID   OIDC federated identity
+#   TFSTATE_RESOURCE_GROUP, TFSTATE_STORAGE_ACCOUNT, TFSTATE_CONTAINER
+#   POSTGRES_ADMIN_OBJECT_ID, POSTGRES_ADMIN_NAME              usually the same OIDC identity
+# and protect the prod environment with required reviewers.
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+      image:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  ARM_USE_OIDC: "true"
+  ARM_USE_AZUREAD: "true"
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: ${{ inputs.environment }}-plan
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: infra/terraform
+    env:
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_image: ${{ inputs.image }}
+      TF_VAR_postgres_entra_admin: >-
+        {"object_id":"${{ vars.POSTGRES_ADMIN_OBJECT_ID }}","principal_name":"${{ vars.POSTGRES_ADMIN_NAME }}","principal_type":"ServicePrincipal"}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: "1.16.5"
+          terraform_wrapper: false
+      - name: terraform init (remote state, Entra ID auth)
+        env:
+          STATE_RG: ${{ vars.TFSTATE_RESOURCE_GROUP }}
+          STATE_SA: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}
+          STATE_CONTAINER: ${{ vars.TFSTATE_CONTAINER }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${STATE_RG}" \
+            -backend-config="storage_account_name=${STATE_SA}" \
+            -backend-config="container_name=${STATE_CONTAINER}" \
+            -backend-config="key=lakehouse-${ENVIRONMENT}.tfstate"
+      - name: terraform plan
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: terraform plan -var-file="environments/${ENVIRONMENT}.tfvars" -out=tfplan -lock-timeout=5m
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tfplan-${{ inputs.environment }}
+          path: infra/terraform/tfplan
+          retention-days: 5
+
+  apply-and-release:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    environment: ${{ inputs.environment }} # required reviewers gate prod here
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_image: ${{ inputs.image }}
+      TF_VAR_postgres_entra_admin: >-
+        {"object_id":"${{ vars.POSTGRES_ADMIN_OBJECT_ID }}","principal_name":"${{ vars.POSTGRES_ADMIN_NAME }}","principal_type":"ServicePrincipal"}
+      IMAGE: ${{ inputs.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: "1.16.5"
+          terraform_wrapper: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tfplan-${{ inputs.environment }}
+          path: infra/terraform
+
+      - name: terraform apply (the reviewed plan, nothing else)
+        working-directory: infra/terraform
+        env:
+          STATE_RG: ${{ vars.TFSTATE_RESOURCE_GROUP }}
+          STATE_SA: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}
+          STATE_CONTAINER: ${{ vars.TFSTATE_CONTAINER }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${STATE_RG}" \
+            -backend-config="storage_account_name=${STATE_SA}" \
+            -backend-config="container_name=${STATE_CONTAINER}" \
+            -backend-config="key=lakehouse-${ENVIRONMENT}.tfstate"
+          terraform apply -lock-timeout=5m tfplan
+          terraform output -json > "$RUNNER_TEMP/outputs.json"
+
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Map the pipeline managed identity to a least-privilege Postgres role
+        # Public network mode only: the runner is allowed in for this step and removed
+        # again. Private mode runs the same SQL from a VNet-connected runner.
+        run: |
+          rg="$(jq -r .resource_group_name.value "$RUNNER_TEMP/outputs.json")"
+          fqdn="$(jq -r .postgres_fqdn.value "$RUNNER_TEMP/outputs.json")"
+          db="$(jq -r .postgres_database.value "$RUNNER_TEMP/outputs.json")"
+          role="$(jq -r .pipeline_identity.value.name "$RUNNER_TEMP/outputs.json")"
+          mode="$(jq -r .network_mode.value "$RUNNER_TEMP/outputs.json")"
+          server="${fqdn%%.*}"
+          if [ "$mode" != "public" ]; then
+            echo "::notice::private network mode: run scripts/sql/bootstrap_pipeline_role.sql from inside the VNet"
+            exit 0
+          fi
+          ip="$(curl -sSf https://api.ipify.org)"
+          az postgres flexible-server firewall-rule create -g "$rg" -n "$server" \
+            --rule-name gha-deploy --start-ip-address "$ip" --end-ip-address "$ip" --output none
+          trap 'az postgres flexible-server firewall-rule delete -g "$rg" -n "$server" --rule-name gha-deploy --yes --output none' EXIT
+          PGPASSWORD="$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)"
+          export PGPASSWORD
+          psql "host=${fqdn} port=5432 dbname=postgres user=${POSTGRES_ADMIN} sslmode=require" \
+            -v ON_ERROR_STOP=1 -v role="$role" -f scripts/sql/bootstrap_pipeline_role_admin.sql
+          psql "host=${fqdn} port=5432 dbname=${db} user=${POSTGRES_ADMIN} sslmode=require" \
+            -v ON_ERROR_STOP=1 -v role="$role" -f scripts/sql/bootstrap_pipeline_role.sql
+        env:
+          POSTGRES_ADMIN: ${{ vars.POSTGRES_ADMIN_NAME }}
+
+      - name: Roll the job to the new image digest
+        run: |
+          rg="$(jq -r .resource_group_name.value "$RUNNER_TEMP/outputs.json")"
+          job="$(jq -r .container_app_job_name.value "$RUNNER_TEMP/outputs.json")"
+          az containerapp job update -g "$rg" -n "$job" --image "$IMAGE" --output none
+
+      - name: Run Write-Audit-Publish in Azure (start the job and wait)
+        run: |
+          rg="$(jq -r .resource_group_name.value "$RUNNER_TEMP/outputs.json")"
+          job="$(jq -r .container_app_job_name.value "$RUNNER_TEMP/outputs.json")"
+          execution="$(az containerapp job start -g "$rg" -n "$job" --query name -o tsv)"
+          echo "Started execution $execution"
+          for _ in $(seq 1 120); do
+            status="$(az containerapp job execution show -g "$rg" -n "$job" \
+              --job-execution-name "$execution" --query properties.status -o tsv)"
+            echo "status: $status"
+            case "$status" in
+              Succeeded) exit 0 ;;
+              Failed|Stopped|Degraded) echo "::error::job execution $execution ended with $status"; exit 1 ;;
+            esac
+            sleep 30
+          done
+          echo "::error::timed out waiting for $execution"
+          exit 1

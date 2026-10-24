@@ -1,0 +1,70 @@
+name: deploy
+
+# Release to Azure: dev first, then prod behind a GitHub environment approval.
+# Authentication is GitHub OIDC -> Entra ID workload identity federation, so the
+# repository holds no Azure secrets. Requires a real subscription (see README,
+# "Full Azure deployment"); CI only lints this workflow with actionlint.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: Signed image from ci.yml, pinned by digest (ghcr.io/OWNER/REPO@sha256:...)
+        required: true
+        type: string
+      target:
+        description: How far to promote
+        type: choice
+        options: [dev, dev-and-prod]
+        default: dev
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  verify-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Reject tags, require a digest
+        env:
+          IMAGE: ${{ inputs.image }}
+        run: |
+          if ! printf '%s' "$IMAGE" | grep -Eq '^ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$'; then
+            echo "::error::image must be ghcr.io/...@sha256:<digest>"
+            exit 1
+          fi
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Verify the keyless signature was made by ci.yml on main
+        env:
+          IMAGE: ${{ inputs.image }}
+        run: |
+          cosign verify "$IMAGE" \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/ci.yml@refs/heads/main$" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com > /dev/null
+          echo "Signature verified for $IMAGE"
+
+  dev:
+    needs: verify-image
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      environment: dev
+      image: ${{ inputs.image }}
+    permissions:
+      contents: read
+      id-token: write
+
+  prod:
+    needs: dev
+    if: inputs.target == 'dev-and-prod'
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      environment: prod
+      image: ${{ inputs.image }}
+    permissions:
+      contents: read
+      id-token: write
