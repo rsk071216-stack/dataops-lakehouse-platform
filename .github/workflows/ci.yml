@@ -46,7 +46,9 @@ jobs:
 
       - name: sqlfluff (dbt templater)
         working-directory: transform
-        run: uv run --frozen sqlfluff lint models tests --format github-annotation-native
+        run: |
+          mkdir -p ../.lake  # the dbt templater opens the (empty) DuckDB file
+          uv run --frozen sqlfluff lint models tests --format github-annotation-native
 
       - name: yamllint
         run: uv run --frozen yamllint --strict .

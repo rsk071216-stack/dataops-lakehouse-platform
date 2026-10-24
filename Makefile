@@ -23,7 +23,7 @@ setup: ## Install the locked toolchain and dbt packages
 lint: ## ruff + sqlfluff + yamllint
 	$(UV) ruff check .
 	$(UV) ruff format --check .
-	cd transform && $(UV) sqlfluff lint models tests
+	mkdir -p .lake && cd transform && $(UV) sqlfluff lint models tests
 	$(UV) yamllint --strict .
 
 fmt: ## Auto-format Python and SQL
