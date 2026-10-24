@@ -1,5 +1,7 @@
 -- Grain: one row per pickup zone, day type (weekday/weekend) and hour of day.
 -- Feeds driver supply planning: where and when to position vehicles.
+-- Zones 264 (Unknown) and 265 (Outside of NYC) cannot be staffed, so they are
+-- excluded from planning (they remain in fct_trips for revenue reporting).
 with trips as (
 
     select
@@ -12,6 +14,7 @@ with trips as (
             else 'weekday'
         end as day_type
     from {{ ref('fct_trips') }}
+    where pickup_zone_id not in (264, 265)
 
 )
 
