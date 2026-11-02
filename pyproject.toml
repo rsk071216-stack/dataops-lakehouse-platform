@@ -9,7 +9,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "dlt[duckdb,postgres,parquet,az]==1.31.0",
     "duckdb==1.5.6",
-    "dbt-core==1.12.5",
+    "dbt-core==1.12.6",
     "dbt-duckdb==1.11.0",
     "dbt-postgres==1.11.0",
     "dagster==1.13.26",
@@ -22,9 +22,9 @@ dependencies = [
 [dependency-groups]
 dev = [
     "dagster-webserver==1.13.26",
-    "datacontract-cli[csv,parquet,postgres]==1.2.4",
+    "datacontract-cli[csv,parquet,postgres]==1.2.7",
     "pytest==9.1.1",
-    "ruff==0.17.0",
+    "ruff==0.17.1",
     "sqlfluff==4.4.0",
     "sqlfluff-templater-dbt==4.4.0",
     "yamllint==1.38.0",
